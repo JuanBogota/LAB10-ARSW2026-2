@@ -1,0 +1,33 @@
+{
+  "info": {
+    "name": "Fibonacci Serverless",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Fibonacci nth",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Status 200', function () { pm.response.to.have.status(200); });",
+              "pm.test('Respuesta no vacia', function () { pm.expect(pm.response.text().length).to.be.above(0); });"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": { "mode": "raw", "raw": "{ \"nth\": {{nth}} }" },
+        "url": {
+          "raw": "{{baseUrl}}/api/Fibonacci",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "Fibonacci"]
+        }
+      }
+    }
+  ]
+}

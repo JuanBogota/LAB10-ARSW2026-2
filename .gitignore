@@ -1,0 +1,13 @@
+# Dependencias
+node_modules/
+
+# Configuración local de Azure Functions (puede traer secretos)
+local.settings.json
+
+# Variables de entorno
+.env
+
+# Logs y archivos del sistema
+*.log
+.DS_Store
+Thumbs.db
