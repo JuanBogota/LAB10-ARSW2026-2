@@ -147,6 +147,47 @@ Lo que creemos que pasó es que había 4 instancias y las peticiones no se repar
 El escenario pide que todas las peticiones sean respondidas y que la CPU no pase de 70 %. 
 Con serverless no se perdió ninguna petición, pero el escenario no se cumple por completo. La plataforma sí creó varias instancias, pero repartió mal la carga. Una instancia se saturó y 7 de las 10 peticiones tardaron más de 90 segundos.
 
+Paso 6, Fibonacci recursivo con memoization. Esta parte se hizo en una segunda Function App, `FunctionProjectFibonacciKaliche`, creada en otra cuenta de Azure (Azure for Students, grupo de recursos `SCALABILITY_LAB_II`, Chile Central, plan Consumo en Windows y runtime 4.x), porque el trabajo del laboratorio se repartió entre los dos integrantes. Por eso la instancia y sus tiempos no son los de las pruebas del paso 5.
+
+Se creó una nueva función, `FibonacciMemo` (carpeta `FunctionProject/FibonacciMemo`). Calcula `fib(n) = fib(n-1) + fib(n-2)` de forma recursiva y guarda cada resultado en un `Map` que vive en la memoria del proceso, así que un valor ya calculado no se vuelve a calcular. Para poder ver qué pasa con la memoria, la respuesta incluye si el valor ya estaba guardado (`cacheHit`), cuántos valores había en la caché antes y después, el identificador de la instancia que respondió (`WEBSITE_INSTANCE_ID`) y cuántos segundos lleva encendida esa instancia. Las pruebas se hicieron con el script `load-test/memo-test.js`, que llama a la función con n igual a 10, 100, 1000, 5000 y 1000000.
+
+El primer despliegue desde Visual Studio Code falló con el mensaje `Offset to Central Directory cannot be held in an Int64`, que quiere decir que el servidor no pudo leer el zip. En el mismo registro aparecían errores de red (`ENOTFOUND cdn.functions.azure.com`). Se volvió a desplegar sin cambiar nada y esta vez terminó bien.
+
+Primera ronda, justo después de desplegar. Con la instancia `879a4f34` recién encendida (unos 200 s de uptime), ningún valor estaba guardado y la caché fue creciendo con cada n.
+
+| n | Código | cacheHit | Caché (antes → después) |
+|---|---|---|---|
+| 10 | 200 | false | 2 → 11 |
+| 100 | 200 | false | 11 → 101 |
+| 1000 | 200 | false | 101 → 1001 |
+| 5000 | 200 | false | 1001 → 5001 |
+| 1000000 | 500 | no aplica | stack overflow |
+
+Con n igual a 1000000 la función respondió 500 con el mensaje de desbordamiento de pila. Con recursión, Node no aguanta una profundidad tan grande, así que este valor falla aunque haya memoization. Es una diferencia importante con la versión iterativa del paso 5, que sí calculó ese valor en unos 8,5 s.
+
+Pruebas repetidas, minutos después de la primera. Se corrió el mismo script tres veces seguidas (7:32:20, 7:32:26 y 7:32:30 p. m.). En todas, los valores 10, 100, 1000 y 5000 salieron con `cacheHit` en true, la caché se quedó en 5001 valores y la instancia siguió siendo `879a4f34`, con el uptime subiendo de 213 a 224 s.
+
+![alt text](images/part3/solucion/16_memo_primera_ronda_y_repetidas.png)
+
+Prueba tras inactividad. Después de la última llamada (7:42:57 p. m.) no se volvió a usar la función. El resultado dependió de cuánto se esperó:
+
+| Cuándo | Tiempo sin tráfico | Instancia | Uptime | cacheHit | Caché (antes → después) |
+|---|---|---|---|---|---|
+| 7:32:30 p. m. | pocos segundos | `879a4f34` | 224 s | true | 5001 → 5001 |
+| 7:41:18 p. m. | unos 9 min | `879a4f34` | 752 s | true | 5001 → 5001 |
+| 7:42:57 p. m. | unos 3 s | `879a4f34` | 850 s | true | 5001 → 5001 |
+| 8:37:24 p. m. | unos 54 min | `306eac1b` | 0 a 1 s | false | 2 → 11, 11 → 101, 101 → 1001, 1001 → 5001 |
+
+A los 9 minutos sin tráfico la caché seguía intacta y el uptime siguió contando sin reiniciarse (de 224 s a 752 s hay justo los 8 min 48 s que pasaron). A los 54 minutos la respuesta vino de otra instancia, con otro identificador, uptime en cero, y la caché empezó de nuevo con solo 2 valores y volvió a crecer igual que en la primera ronda. La primera petición de esa ronda, n igual a 10, tardó 1442 ms frente a unos 170 ms de las demás.
+
+![alt text](images/part3/solucion/17_memo_9_minutos.png)
+
+![alt text](images/part3/solucion/18_memo_54_minutos.png)
+
+Lo que se midió es que la instancia cambió y que la caché se perdió entre los 9 y los 54 minutos de inactividad. No se midió en qué minuto exacto pasó ni la causa, porque Azure no avisa cuándo apaga una instancia y no se revisaron los registros de Application Insights. Lo más probable es que Azure apagara la instancia por inactividad, algo que el plan Consumo hace, y que la petición siguiente levantara una nueva. En las pruebas con n igual a 10 hubo además dos errores `fetch failed` en la primera llamada de una corrida que llegó después de una pausa. La función respondió bien en las demás llamadas, así que se toman como un fallo de red del equipo desde donde se probó, aunque no se pudo comprobar.
+
+Comportamiento: mientras la instancia sigue encendida, la memoization funciona y los valores ya calculados se responden desde la memoria. Cuando la instancia se apaga o se reemplaza, esa memoria se pierde y todo se calcula otra vez. Con n muy grande la versión recursiva ni siquiera llega a calcularse por el desbordamiento de pila.
+
 #### Respuestas
 
 
@@ -190,7 +231,7 @@ Container Apps. La función va dentro de un contenedor. Ventajas, permite usar l
 
 * ¿Por qué la memoization falla o no funciona de forma correcta?
 
-La memoization guarda en la memoria de la función los resultados que ya se calcularon. En serverless esa memoria no es confiable. Cada instancia tiene su propia memoria y en nuestra prueba había 4 servidores, así que una petición puede caer en una instancia que no tiene nada guardado. Además Azure apaga las instancias cuando pasan un tiempo sin tráfico y la nueva empieza con la memoria vacía, por eso si se espera varios minutos puede que todo se calcule otra vez. Y con un n de un millón la recursión pasa el límite de llamadas de Node y da error. La solución es guardar los resultados fuera de la función, por ejemplo en una caché externa como Redis, porque una función serverless no debe guardar estado, como dice el principio de ausencia de estado de SOA.
+La memoization guarda en la memoria de la función los resultados que ya se calcularon. En serverless esa memoria no es confiable. Cada instancia tiene su propia memoria y en nuestra prueba había 4 servidores, así que una petición puede caer en una instancia que no tiene nada guardado. Además Azure apaga las instancias cuando pasan un tiempo sin tráfico y la nueva empieza con la memoria vacía, y eso se comprobó en el paso 6: después de unos 9 minutos sin tráfico la caché seguía igual, pero a los 54 minutos la respuesta vino de otra instancia, con el uptime en cero y la caché vacía, así que todo se calculó otra vez. Y con un n de un millón la recursión pasa el límite de llamadas de Node y da error. La solución es guardar los resultados fuera de la función, por ejemplo en una caché externa como Redis, porque una función serverless no debe guardar estado, como dice el principio de ausencia de estado de SOA.
 
 * ¿Cómo funciona el sistema de facturación de las Function App?
 
